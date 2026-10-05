@@ -3,7 +3,12 @@ name: Check NYC marriage slots
 on:
   schedule:
     - cron: "*/15 * * * *"   # every 15 minutes (GitHub may delay runs a few minutes)
-  workflow_dispatch: {}       # "Run workflow" button for manual runs
+  workflow_dispatch:          # "Run workflow" button for manual runs
+    inputs:
+      test_notify:
+        description: "Only send a test notification"
+        type: boolean
+        default: false
 
 concurrency:
   group: slot-checker
@@ -44,7 +49,7 @@ jobs:
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-        run: python checker.py
+        run: python checker.py ${{ inputs.test_notify && '--test-notify' || '' }}
 
       - name: Save state
         if: always()
