@@ -20,7 +20,8 @@ Config (environment variables):
 
 Usage:
   python checker.py            # check once
-  python checker.py --loop     # check every 15 minutes, forever
+  python checker.py --loop     # check every CHECK_INTERVAL_MIN (5) minutes
+                               # for MAX_RUNTIME_MIN (forever if unset)
   python checker.py --test-notify   # send a test notification and exit
 """
 
@@ -46,7 +47,8 @@ OFFICE = os.environ.get("OFFICE", "Manhattan")
 MIN_TIME = dt.time.fromisoformat(os.environ.get("MIN_TIME", "08:00"))
 STATE_FILE = Path(os.environ.get("STATE_FILE", "state.json"))
 DEBUG_DIR = Path(os.environ.get("DEBUG_DIR", "debug"))
-INTERVAL_SECONDS = 15 * 60
+INTERVAL_SECONDS = float(os.environ.get("CHECK_INTERVAL_MIN", "5")) * 60
+MAX_RUNTIME_SECONDS = float(os.environ.get("MAX_RUNTIME_MIN", "0")) * 60  # 0 = no limit
 # 1 = alert on every check while slots are open; 0 = only when new slots appear
 NOTIFY_EVERY_RUN = os.environ.get("NOTIFY_EVERY_RUN", "0") == "1"
 
@@ -346,12 +348,24 @@ def main():
         notify("Test: NYC marriage slot checker", f"Notifications work. Watching {OFFICE} on {TARGET_DATE}.")
         return
     if "--loop" in sys.argv:
-        while True:
+        start, failures = time.monotonic(), 0
+        while dt.date.today() <= TARGET_DATE:
+            began = time.monotonic()
             try:
                 run_once()
+                failures = 0
             except Exception as e:
-                log(f"Check failed: {e}")
-            time.sleep(INTERVAL_SECONDS)
+                failures += 1
+                log(f"Check failed ({failures} in a row): {e}")
+                if failures == 3:  # warn once, not on every failure
+                    notify("NYC slot checker is failing",
+                           f"The last 3 checks failed, it may need fixing.\nLast error: {e}")
+            next_at = began + INTERVAL_SECONDS
+            if MAX_RUNTIME_SECONDS and next_at - start > MAX_RUNTIME_SECONDS:
+                log("Reached MAX_RUNTIME_MIN, exiting.")
+                return
+            time.sleep(max(0, next_at - time.monotonic()))
+        return
     run_once()
 
 

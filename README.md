@@ -25,8 +25,12 @@ Email (optional, works alongside Telegram): use a Gmail address plus an
 3. Go to the Actions tab → **Check NYC marriage slots** → **Run workflow** to test it.
    Open the run to see the log ("Times seen on page ...") and download the
    `debug-*` artifact to see screenshots of each step.
-4. After that it runs every ~5 min on its own. GitHub can delay scheduled runs by a few minutes.
-   Disable the workflow after Oct 20.
+4. The **Watch NYC marriage slots** workflow does the real watching: one long job that
+   checks every 5 minutes and restarts itself every ~6 hours. Start it once with
+   **Run workflow**. An hourly schedule restarts it if the chain ever breaks, and it
+   stops on its own after Oct 20. **Check NYC marriage slots (manual)** is for one-off
+   checks and test notifications. The repo must be public, because GitHub Actions
+   minutes are only unlimited for public repos.
 
 ## 2b. Or run it on your own computer
 

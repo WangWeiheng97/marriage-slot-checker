@@ -1,25 +1,26 @@
-name: Check NYC marriage slots (manual)
+name: Watch NYC marriage slots
 
+# One long job that checks every 5 minutes for ~5h40m, then restarts itself
+# (GitHub's job limit is 6h). More reliable than GitHub's cron, which is often
+# late or skips runs. The hourly cron only restarts the chain if it ever breaks.
 on:
-  workflow_dispatch:          # "Run workflow" button for manual runs
-    inputs:
-      test_notify:
-        description: "Only send a test notification"
-        type: boolean
-        default: false
-      min_time:
-        description: "Earliest slot time to alert on (24h, e.g. 08:00). Blank = 08:00"
-        type: string
-        default: ""
+  workflow_dispatch: {}
+  schedule:
+    - cron: "17 * * * *"
 
+# Only one watcher at a time; an extra trigger just waits as "pending".
 concurrency:
-  group: slot-checker
+  group: slot-watcher
   cancel-in-progress: false
 
+permissions:
+  actions: write   # to restart itself
+  contents: read
+
 jobs:
-  check:
+  watch:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
@@ -33,7 +34,6 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
 
-      # Remember which slots were already notified, so you get one alert per new slot
       - name: Restore state
         uses: actions/cache/restore@v4
         with:
@@ -41,18 +41,21 @@ jobs:
           key: slot-state-v2-${{ github.run_id }}
           restore-keys: slot-state-v2-
 
-      - name: Check
+      - name: Check every 5 minutes
         env:
           TARGET_DATE: "2026-10-20"
           OFFICE: "Manhattan"
-          MIN_TIME: ${{ inputs.min_time || '08:00' }}
+          MIN_TIME: "08:00"
           NOTIFY_EVERY_RUN: "1"     # alert on every check while a slot is open
+          CHECK_INTERVAL_MIN: "5"
+          MAX_RUNTIME_MIN: "340"
+          TZ: America/New_York
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
-        run: python checker.py ${{ inputs.test_notify && '--test-notify' || '' }}
+        run: python checker.py --loop
 
       - name: Save state
         if: always()
@@ -61,10 +64,11 @@ jobs:
           path: state.json
           key: slot-state-v2-${{ github.run_id }}
 
-      - name: Upload screenshots
+      - name: Restart watcher
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: debug-${{ github.run_id }}
-          path: debug/
-          retention-days: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(TZ=America/New_York date +%F)" \< "2026-10-21" ]; then
+            gh workflow run watch.yml --ref "${{ github.ref_name }}" -R "${{ github.repository }}"
+          fi
