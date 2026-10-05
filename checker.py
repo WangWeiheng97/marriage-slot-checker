@@ -72,6 +72,58 @@ DEEP_TEXT_JS = """
 """
 
 
+# Multi-day layouts: find every date header ("Tue 10/20", "Oct 20", ...), then
+# give each time on the page to the nearest header above it (by x position),
+# and return only the times under the target date's header.
+COLUMN_TIMES_JS = """
+([targetRe, anyDayRe, timeRe]) => {
+  const els = [];
+  const walk = (root) => {
+    for (const e of root.querySelectorAll('*')) { els.push(e); if (e.shadowRoot) walk(e.shadowRoot); }
+  };
+  walk(document);
+  const text = (e) => (e.innerText || '').trim();
+  const box = (e) => e.getBoundingClientRect();
+  const visible = (e) => { const r = box(e); return r.width > 0 && r.height > 0; };
+  // Innermost visible short elements whose text matches re
+  const innermost = (re, maxLen) => {
+    const m = els.filter(e => visible(e) && text(e).length <= maxLen && re.test(text(e)));
+    return m.filter(e => !m.some(o => o !== e && e.contains(o)));
+  };
+  const target = new RegExp(targetRe, 'i'), anyDay = new RegExp(anyDayRe, 'i');
+  const headers = innermost(anyDay, 40).filter(e => !new RegExp(timeRe, 'i').test(text(e)));
+  const isTarget = (h) => target.test(text(h));
+  const times = innermost(new RegExp(timeRe, 'i'), 40);
+  const picked = [];
+  for (const t of times) {
+    const tb = box(t), cx = tb.left + tb.width / 2;
+    let best = null, bestDist = Infinity;
+    for (const h of headers) {
+      const hb = box(h);
+      if (hb.bottom > tb.top + 2) continue;          // header must be above the time
+      const d = Math.abs(hb.left + hb.width / 2 - cx);
+      if (d < bestDist) { bestDist = d; best = h; }
+    }
+    if (best && isTarget(best)) picked.push(text(t));
+  }
+  return { headers: headers.map(text), targetFound: headers.some(isTarget), times: picked };
+}
+"""
+
+
+def date_regexes(d):
+    """(regex for this date's column header, regex for any date header)."""
+    mon = d.strftime("%b").lower()
+    mon_re = rf"{mon}[a-z]*\.?"
+    wd_re = rf"{d.strftime('%a').lower()}[a-z]*\.?"
+    target = (rf"\b({mon_re}\s+{d.day}\b|{d.month}/{d.day}\b|0?{d.month}/0?{d.day}\b|"
+              rf"{wd_re}\W+({mon_re}\s+)?{d.day}\b|{d.day}\s+{mon_re})")
+    any_day = (r"\b((jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b|"
+               r"\d{1,2}/\d{1,2}\b|(mon|tue|wed|thu|fri|sat|sun)[a-z]*\.?\W+"
+               r"((jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+)?\d{1,2}\b)")
+    return target, any_day
+
+
 def log(msg):
     print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
 
@@ -353,14 +405,21 @@ def check():
             dump_debug(page, "3_date")
 
             page_text = page.evaluate(DEEP_TEXT_JS)
+            target_re, any_day_re = date_regexes(TARGET_DATE)
+            columns = page.evaluate(COLUMN_TIMES_JS, [target_re, any_day_re, TIME_RE.pattern])
         finally:
             browser.close()
 
     no_slots = re.search(r"no (available )?(appointments|slots|times)|fully booked|not available",
                          page_text, re.I)
-    times = sorted(parse_times(page_text) - baseline)
-    if not times:
-        times = sorted(parse_times("\n".join(responses)))
+    if len(columns["headers"]) >= 2:
+        # Several days on screen: only trust times under the target date's column.
+        log(f"Date columns on page: {columns['headers']}")
+        if not columns["targetFound"]:
+            raise RuntimeError(f"No column for {TARGET_DATE:%a %b %-d} on the page (see {DEBUG_DIR}/)")
+        times = sorted(parse_times("\n".join(columns["times"])))
+    else:
+        times = sorted(parse_times(page_text) - baseline)
     log(f"Times seen on page for {TARGET_DATE}: {[t.strftime('%-I:%M %p') for t in times] or 'none'}"
         + (" (page says no availability)" if no_slots else ""))
     return [t.strftime("%-I:%M %p") for t in times if t >= MIN_TIME]
