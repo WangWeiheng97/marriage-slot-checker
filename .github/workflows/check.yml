@@ -10,7 +10,7 @@ on:
         type: boolean
         default: false
       min_time:
-        description: "Earliest slot time to alert on (24h, e.g. 08:00). Blank = 09:00"
+        description: "Earliest slot time to alert on (24h, e.g. 08:00). Blank = 08:00"
         type: string
         default: ""
 
@@ -47,7 +47,7 @@ jobs:
         env:
           TARGET_DATE: "2026-10-20"
           OFFICE: "Manhattan"
-          MIN_TIME: ${{ inputs.min_time || '09:00' }}
+          MIN_TIME: ${{ inputs.min_time || '08:00' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
