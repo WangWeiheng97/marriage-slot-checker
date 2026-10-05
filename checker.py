@@ -17,6 +17,7 @@ Config (environment variables):
   STATE_FILE         state.json     (avoids re-sending the same slots)
   NOTIFY_EVERY_RUN   0              (1 = alert on every check while slots are open)
   DEBUG_DIR          debug          (screenshots / page text for troubleshooting)
+  BROWSER_CHANNEL    (unset)        "chrome" = use the installed Google Chrome
 
 Usage:
   python checker.py            # check once
@@ -258,7 +259,8 @@ def check():
     """Returns the list of qualifying slot times (as 'H:MM AM' strings)."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=os.environ.get("HEADFUL") != "1",
-                                    executable_path=os.environ.get("CHROMIUM_PATH") or None)
+                                    executable_path=os.environ.get("CHROMIUM_PATH") or None,
+                                    channel=os.environ.get("BROWSER_CHANNEL") or None)
         page = browser.new_page(viewport={"width": 1280, "height": 1800})
 
         # Keep the JSON the page fetches (Salesforce aura/apex calls): slot times

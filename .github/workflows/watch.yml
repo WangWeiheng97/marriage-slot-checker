@@ -29,10 +29,11 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      # Uses the runner's preinstalled Google Chrome: downloading Playwright's
+      # browser + system packages sometimes takes 15+ minutes.
       - name: Install
-        run: |
-          pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
+        timeout-minutes: 5
+        run: pip install -r requirements.txt
 
       - name: Restore state
         uses: actions/cache/restore@v4
@@ -50,6 +51,7 @@ jobs:
           CHECK_INTERVAL_MIN: "5"
           MAX_RUNTIME_MIN: "340"
           TZ: America/New_York
+          BROWSER_CHANNEL: chrome
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
@@ -65,7 +67,7 @@ jobs:
           key: slot-state-v2-${{ github.run_id }}
 
       - name: Restart watcher
-        if: always()
+        if: ${{ !cancelled() }}   # cancelling a run stops the chain (hourly cron restarts it)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
