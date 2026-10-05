@@ -46,7 +46,7 @@ jobs:
         env:
           TARGET_DATE: "2026-10-20"
           OFFICE: "Manhattan"
-          MIN_TIME: "08:00"
+          MIN_TIME: "09:00"
           NOTIFY_EVERY_RUN: "1"     # alert on every check while a slot is open
           CHECK_INTERVAL_MIN: "5"
           MAX_RUNTIME_MIN: "340"

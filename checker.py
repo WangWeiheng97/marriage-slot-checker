@@ -10,7 +10,7 @@ after MIN_TIME shows up.
 Config (environment variables):
   TARGET_DATE        2026-10-20
   OFFICE             Manhattan
-  MIN_TIME           08:00          (24h; slots >= this time count)
+  MIN_TIME           09:00          (24h; slots >= this time count)
   TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID           -> Telegram notification
   SMTP_USER / SMTP_PASSWORD / EMAIL_TO            -> email (Gmail app password)
   SMTP_HOST (smtp.gmail.com) / SMTP_PORT (465)
@@ -45,7 +45,7 @@ from playwright.sync_api import sync_playwright
 URL = os.environ.get("URL", "https://clerkscheduler.cityofnewyork.us/s/MarriageCeremony")
 TARGET_DATE = dt.date.fromisoformat(os.environ.get("TARGET_DATE", "2026-10-20"))
 OFFICE = os.environ.get("OFFICE", "Manhattan")
-MIN_TIME = dt.time.fromisoformat(os.environ.get("MIN_TIME", "08:00"))
+MIN_TIME = dt.time.fromisoformat(os.environ.get("MIN_TIME", "09:00"))
 STATE_FILE = Path(os.environ.get("STATE_FILE", "state.json"))
 DEBUG_DIR = Path(os.environ.get("DEBUG_DIR", "debug"))
 INTERVAL_SECONDS = float(os.environ.get("CHECK_INTERVAL_MIN", "5")) * 60

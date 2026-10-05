@@ -1,7 +1,7 @@
 # NYC marriage ceremony slot checker
 
 Checks https://clerkscheduler.cityofnewyork.us/s/MarriageCeremony every 15 minutes
-for a **Manhattan** office slot on **Tue Oct 20, 2026** at **8:00 AM or later**, and
+for a **Manhattan** office slot on **Tue Oct 20, 2026** at **9:00 AM or later**, and
 sends you a Telegram message and/or email when one opens up. You get an alert on
 every check while a slot is open (set `NOTIFY_EVERY_RUN: "0"` in the workflow to be told only about new slots).
 
@@ -49,7 +49,7 @@ python checker.py --loop          # check every 15 minutes until you stop it
 |---------------|--------------|------------------------------------------|
 | `TARGET_DATE` | `2026-10-20` | Date to check                            |
 | `OFFICE`      | `Manhattan`  | Office name as shown on the site         |
-| `MIN_TIME`    | `08:00`      | Earliest slot time that counts (24h, inclusive) |
+| `MIN_TIME`    | `09:00`      | Earliest slot time that counts (24h, inclusive) |
 
 ## How it works / if it breaks
 
