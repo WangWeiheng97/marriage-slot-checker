@@ -15,6 +15,7 @@ Config (environment variables):
   SMTP_USER / SMTP_PASSWORD / EMAIL_TO            -> email (Gmail app password)
   SMTP_HOST (smtp.gmail.com) / SMTP_PORT (465)
   STATE_FILE         state.json     (avoids re-sending the same slots)
+  NOTIFY_EVERY_RUN   0              (1 = alert on every check while slots are open)
   DEBUG_DIR          debug          (screenshots / page text for troubleshooting)
 
 Usage:
@@ -46,6 +47,8 @@ MIN_TIME = dt.time.fromisoformat(os.environ.get("MIN_TIME", "08:00"))
 STATE_FILE = Path(os.environ.get("STATE_FILE", "state.json"))
 DEBUG_DIR = Path(os.environ.get("DEBUG_DIR", "debug"))
 INTERVAL_SECONDS = 15 * 60
+# 1 = alert on every check while slots are open; 0 = only when new slots appear
+NOTIFY_EVERY_RUN = os.environ.get("NOTIFY_EVERY_RUN", "0") == "1"
 
 TIME_RE = re.compile(r"(?<!\d)(1[0-2]|0?[1-9]):([0-5]\d)\s*([AaPp])\.?\s*[Mm]\.?")
 
@@ -321,10 +324,10 @@ def run_once():
     previous = set(state.get("slots", []))
     new = [s for s in slots if s not in previous]
 
-    if new:
+    if new or (slots and NOTIFY_EVERY_RUN):
         subject = f"NYC marriage slot open: {OFFICE} {TARGET_DATE:%a %b %-d}"
         body = (f"Available time(s) at/after {MIN_TIME:%-I:%M %p}: {', '.join(slots)}\n"
-                f"New since last check: {', '.join(new)}\n\nBook now: {URL}")
+                f"New since last check: {', '.join(new) or 'none'}\n\nBook now: {URL}")
         log(subject + " -> " + ", ".join(slots))
         if not notify(subject, body):
             # Don't remember slots we failed to tell you about; retry next run.

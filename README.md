@@ -2,8 +2,8 @@
 
 Checks https://clerkscheduler.cityofnewyork.us/s/MarriageCeremony every 15 minutes
 for a **Manhattan** office slot on **Tue Oct 20, 2026** at **8:00 AM or later**, and
-sends you a Telegram message and/or email when one opens up. You get one alert per
-new slot, not a repeat on every check.
+sends you a Telegram message and/or email when one opens up. You get an alert on
+every check while a slot is open (set `NOTIFY_EVERY_RUN: "0"` in the workflow to be told only about new slots).
 
 ## 1. Set up Telegram (about 2 minutes)
 
