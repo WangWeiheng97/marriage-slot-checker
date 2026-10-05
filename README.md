@@ -3,7 +3,7 @@
 Checks https://clerkscheduler.cityofnewyork.us/s/MarriageCeremony every 15 minutes
 for a **Manhattan** office slot on **Tue Oct 20, 2026** at **9:00 AM or later**, and
 sends you a Telegram message and/or email when one opens up. You get one alert per
-new slot, not a repeat every 15 minutes.
+new slot, not a repeat on every check.
 
 ## 1. Set up Telegram (about 2 minutes)
 
@@ -25,7 +25,7 @@ Email (optional, works alongside Telegram): use a Gmail address plus an
 3. Go to the Actions tab → **Check NYC marriage slots** → **Run workflow** to test it.
    Open the run to see the log ("Times seen on page ...") and download the
    `debug-*` artifact to see screenshots of each step.
-4. After that it runs every ~15 min on its own. GitHub can delay scheduled runs by a few minutes.
+4. After that it runs every ~5 min on its own. GitHub can delay scheduled runs by a few minutes.
    Disable the workflow after Oct 20.
 
 ## 2b. Or run it on your own computer
