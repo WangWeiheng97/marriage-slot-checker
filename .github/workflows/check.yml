@@ -31,8 +31,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: state.json
-          key: slot-state-${{ github.run_id }}
-          restore-keys: slot-state-
+          key: slot-state-v2-${{ github.run_id }}
+          restore-keys: slot-state-v2-
 
       - name: Check
         env:
@@ -51,7 +51,7 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: state.json
-          key: slot-state-${{ github.run_id }}
+          key: slot-state-v2-${{ github.run_id }}
 
       - name: Upload screenshots
         if: always()
