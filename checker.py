@@ -88,6 +88,25 @@ def send_telegram(text):
     return True
 
 
+def send_telegram_file(path, caption):
+    """Sends a file (e.g. the page screenshot) as a Telegram document."""
+    token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+    path = Path(path)
+    if not (token and chat and path.exists()):
+        return False
+    boundary = "----slotchecker" + str(int(time.time() * 1000))
+    parts = []
+    for name, value in (("chat_id", chat), ("caption", caption)):
+        parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+    parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="document"; filename="{path.name}"\r\n'
+                 f"Content-Type: image/png\r\n\r\n".encode() + path.read_bytes() + b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode())
+    req = urllib.request.Request(f"https://api.telegram.org/bot{token}/sendDocument", data=b"".join(parts),
+                                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+    urllib.request.urlopen(req, timeout=60)
+    return True
+
+
 def send_email(subject, body):
     user, pw, to = (os.environ.get(k) for k in ("SMTP_USER", "SMTP_PASSWORD", "EMAIL_TO"))
     if not (user and pw and to):
@@ -333,7 +352,12 @@ def run_once():
         body = (f"Available time(s) at/after {MIN_TIME:%-I:%M %p}: {', '.join(slots)}\n"
                 f"New since last check: {', '.join(new) or 'none'}\n\nBook now: {URL}")
         log(subject + " -> " + ", ".join(slots))
-        if not notify(subject, body):
+        delivered = notify(subject, body)
+        try:  # show exactly what the checker saw, so the result can be verified
+            send_telegram_file(DEBUG_DIR / "3_date.png", "What the checker saw (after picking office + date)")
+        except Exception as e:
+            log(f"telegram screenshot failed: {e}")
+        if not delivered:
             # Don't remember slots we failed to tell you about; retry next run.
             slots = [s for s in slots if s in previous]
     elif slots:
