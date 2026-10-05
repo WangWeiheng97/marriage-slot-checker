@@ -110,6 +110,7 @@ def notify(subject, body):
         log("WARNING: no notification channel configured / delivered")
     else:
         log(f"Notified via {', '.join(sent)}")
+    return bool(sent)
 
 
 # --------------------------------------------------------------------------- #
@@ -325,7 +326,9 @@ def run_once():
         body = (f"Available time(s) at/after {MIN_TIME:%-I:%M %p}: {', '.join(slots)}\n"
                 f"New since last check: {', '.join(new)}\n\nBook now: {URL}")
         log(subject + " -> " + ", ".join(slots))
-        notify(subject, body)
+        if not notify(subject, body):
+            # Don't remember slots we failed to tell you about; retry next run.
+            slots = [s for s in slots if s in previous]
     elif slots:
         log(f"Slots still open (already notified): {', '.join(slots)}")
     else:
