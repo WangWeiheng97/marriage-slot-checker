@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+"""
+NYC City Clerk marriage-ceremony slot checker.
+
+Opens https://clerkscheduler.cityofnewyork.us/s/MarriageCeremony in headless
+Chromium, picks the Manhattan office and the target date, reads the available
+time slots, and sends a Telegram and/or email notification when a slot at or
+after MIN_TIME shows up.
+
+Config (environment variables):
+  TARGET_DATE        2026-10-20
+  OFFICE             Manhattan
+  MIN_TIME           09:00          (24h; slots >= this time count)
+  TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID           -> Telegram notification
+  SMTP_USER / SMTP_PASSWORD / EMAIL_TO            -> email (Gmail app password)
+  SMTP_HOST (smtp.gmail.com) / SMTP_PORT (465)
+  STATE_FILE         state.json     (avoids re-sending the same slots)
+  DEBUG_DIR          debug          (screenshots / page text for troubleshooting)
+
+Usage:
+  python checker.py            # check once
+  python checker.py --loop     # check every 15 minutes, forever
+  python checker.py --test-notify   # send a test notification and exit
+"""
+
+import datetime as dt
+import json
+import os
+import re
+import smtplib
+import sys
+import time
+from collections import Counter
+import urllib.parse
+import urllib.request
+from email.message import EmailMessage
+from pathlib import Path
+
+from playwright.sync_api import TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright
+
+URL = os.environ.get("URL", "https://clerkscheduler.cityofnewyork.us/s/MarriageCeremony")
+TARGET_DATE = dt.date.fromisoformat(os.environ.get("TARGET_DATE", "2026-10-20"))
+OFFICE = os.environ.get("OFFICE", "Manhattan")
+MIN_TIME = dt.time.fromisoformat(os.environ.get("MIN_TIME", "09:00"))
+STATE_FILE = Path(os.environ.get("STATE_FILE", "state.json"))
+DEBUG_DIR = Path(os.environ.get("DEBUG_DIR", "debug"))
+INTERVAL_SECONDS = 15 * 60
+
+TIME_RE = re.compile(r"(?<!\d)(1[0-2]|0?[1-9]):([0-5]\d)\s*([AaPp])\.?\s*[Mm]\.?")
+
+# Collects text from the whole page, including inside (Lightning) shadow roots.
+DEEP_TEXT_JS = """
+() => {
+  const out = [];
+  const walk = (root) => {
+    for (const el of root.querySelectorAll('*')) {
+      if (el.shadowRoot) walk(el.shadowRoot);
+    }
+    if (root.innerText !== undefined) out.push(root.innerText);
+    else for (const n of root.childNodes) out.push(n.textContent || '');
+  };
+  walk(document.body);
+  return out.join('\\n');
+}
+"""
+
+
+def log(msg):
+    print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
+
+
+# --------------------------------------------------------------------------- #
+# Notifications
+# --------------------------------------------------------------------------- #
+def send_telegram(text):
+    token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
+    if not (token and chat):
+        return False
+    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
+    urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data, timeout=30)
+    return True
+
+
+def send_email(subject, body):
+    user, pw, to = (os.environ.get(k) for k in ("SMTP_USER", "SMTP_PASSWORD", "EMAIL_TO"))
+    if not (user and pw and to):
+        return False
+    msg = EmailMessage()
+    msg["Subject"], msg["From"], msg["To"] = subject, user, to
+    msg.set_content(body)
+    host = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    port = int(os.environ.get("SMTP_PORT", "465"))
+    with smtplib.SMTP_SSL(host, port, timeout=30) as s:
+        s.login(user, pw)
+        s.send_message(msg)
+    return True
+
+
+def notify(subject, body):
+    sent = []
+    for name, fn in (("telegram", lambda: send_telegram(f"{subject}\n\n{body}")),
+                     ("email", lambda: send_email(subject, body))):
+        try:
+            if fn():
+                sent.append(name)
+        except Exception as e:  # keep going if one channel fails
+            log(f"{name} notification failed: {e}")
+    if not sent:
+        log("WARNING: no notification channel configured / delivered")
+    else:
+        log(f"Notified via {', '.join(sent)}")
+
+
+# --------------------------------------------------------------------------- #
+# Page interaction helpers (selector-agnostic, the Salesforce markup changes)
+# --------------------------------------------------------------------------- #
+def try_click(page, locators, timeout=3000):
+    for loc in locators:
+        try:
+            target = loc.first
+            target.wait_for(state="visible", timeout=timeout)
+            target.click(timeout=timeout)
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def settle(page, ms=1500):
+    try:
+        page.wait_for_load_state("networkidle", timeout=15000)
+    except PWTimeout:
+        pass
+    page.wait_for_timeout(ms)
+
+
+def choose_office(page):
+    name = re.compile(OFFICE, re.I)
+    # A native <select>?
+    for sel in page.locator("select").all():
+        try:
+            opts = sel.locator("option").all_inner_texts()
+            match = next((o for o in opts if name.search(o)), None)
+            if match:
+                sel.select_option(label=match)
+                return True
+        except Exception:
+            pass
+    # A Lightning combobox: open it, then click the option.
+    for cb in page.get_by_role("combobox").all():
+        try:
+            cb.click(timeout=2000)
+            if try_click(page, [page.get_by_role("option", name=name)], timeout=2000):
+                return True
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+    return try_click(page, [
+        page.get_by_role("radio", name=name),
+        page.get_by_role("button", name=name),
+        page.get_by_role("link", name=name),
+        page.get_by_role("option", name=name),
+        page.get_by_label(name),
+        page.get_by_text(name),
+    ])
+
+
+def click_next(page):
+    return try_click(page, [
+        page.get_by_role("button", name=re.compile(r"^\s*(next|continue|search|check availability)\s*$", re.I)),
+    ], timeout=1500)
+
+
+def choose_date(page):
+    d = TARGET_DATE
+    # 1) A date <input> we can type into.
+    inputs = page.locator("input[type='date'], input[name*='date' i], input[placeholder*='date' i], "
+                          "input[aria-label*='date' i], lightning-datepicker input")
+    for i in range(inputs.count()):
+        inp = inputs.nth(i)
+        try:
+            if not inp.is_visible():
+                continue
+            is_native = (inp.get_attribute("type") or "").lower() == "date"
+            for value in ([d.isoformat()] if is_native else
+                          [d.strftime("%b %-d, %Y"), d.strftime("%m/%d/%Y"), d.isoformat()]):
+                inp.fill(value)
+                inp.press("Enter")
+                inp.blur()
+                settle(page, 1000)
+                if not page.locator("[aria-invalid='true']").count():
+                    return True
+        except Exception:
+            continue
+
+    # 2) A calendar widget: navigate to the right month, click the day.
+    month_label = re.compile(rf"{d.strftime('%B')}\s+{d.year}", re.I)
+    next_month = [page.get_by_role("button", name=re.compile(r"next\s*month|next", re.I)),
+                  page.locator("[title*='Next Month' i], [aria-label*='Next Month' i]")]
+    for _ in range(14):
+        text = page.evaluate(DEEP_TEXT_JS)
+        if month_label.search(text):
+            break
+        if not try_click(page, next_month, timeout=1500):
+            break
+        page.wait_for_timeout(700)
+
+    day_names = [
+        d.strftime("%A, %B %-d, %Y"),
+        d.strftime("%B %-d, %Y"),
+        d.strftime("%b %-d, %Y"),
+        d.strftime("%A, %B %-d"),
+        d.isoformat(),
+    ]
+    locs = []
+    for n in day_names:
+        locs += [page.locator(f"[aria-label*='{n}' i]"), page.locator(f"[data-value='{n}']"),
+                 page.locator(f"[data-date='{n}']"), page.locator(f"[title*='{n}' i]")]
+    locs += [
+        page.get_by_role("gridcell", name=re.compile(rf"^\s*{d.day}\s*$")),
+        page.get_by_role("button", name=re.compile(rf"^\s*{d.day}\s*$")),
+        page.locator("td, [role='gridcell'] span, .slds-day").filter(
+            has_text=re.compile(rf"^\s*{d.day}\s*$")),
+    ]
+    return try_click(page, locs, timeout=1500)
+
+
+def parse_times(text):
+    """Counter of times found in text, e.g. {time(9, 30): 1}."""
+    found = Counter()
+    for h, m, ap in TIME_RE.findall(text):
+        h = int(h) % 12 + (12 if ap.lower() == "p" else 0)
+        found[dt.time(h, int(m))] += 1
+    return found
+
+
+def dump_debug(page, tag):
+    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        page.screenshot(path=str(DEBUG_DIR / f"{tag}.png"), full_page=True)
+        (DEBUG_DIR / f"{tag}.txt").write_text(page.evaluate(DEEP_TEXT_JS))
+        (DEBUG_DIR / f"{tag}.html").write_text(page.content())
+    except Exception as e:
+        log(f"debug dump failed: {e}")
+
+
+# --------------------------------------------------------------------------- #
+# Main check
+# --------------------------------------------------------------------------- #
+def check():
+    """Returns the list of qualifying slot times (as 'H:MM AM' strings)."""
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=os.environ.get("HEADFUL") != "1",
+                                    executable_path=os.environ.get("CHROMIUM_PATH") or None)
+        page = browser.new_page(viewport={"width": 1280, "height": 1800})
+
+        # Keep the JSON the page fetches (Salesforce aura/apex calls): slot times
+        # often show up there even when the visual widget is awkward to read.
+        responses = []
+
+        def on_response(resp):
+            try:
+                if "json" in (resp.headers.get("content-type") or "") or "aura" in resp.url:
+                    responses.append(resp.text())
+            except Exception:
+                pass
+
+        page.on("response", on_response)
+
+        try:
+            page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+            settle(page, 3000)
+            dump_debug(page, "1_loaded")
+
+            if not choose_office(page):
+                dump_debug(page, "error_office")
+                raise RuntimeError(f"Could not find/select office '{OFFICE}' (see {DEBUG_DIR}/)")
+            settle(page)
+            click_next(page) and settle(page)
+            dump_debug(page, "2_office")
+
+            responses.clear()  # only keep data fetched for the chosen date
+            # Times already on the page before picking a date (office hours etc.)
+            baseline = parse_times(page.evaluate(DEEP_TEXT_JS))
+            if not choose_date(page):
+                dump_debug(page, "error_date")
+                raise RuntimeError(f"Could not select date {TARGET_DATE} (see {DEBUG_DIR}/)")
+            settle(page, 2500)
+            click_next(page) and settle(page, 2500)
+            dump_debug(page, "3_date")
+
+            page_text = page.evaluate(DEEP_TEXT_JS)
+        finally:
+            browser.close()
+
+    no_slots = re.search(r"no (available )?(appointments|slots|times)|fully booked|not available",
+                         page_text, re.I)
+    times = sorted(parse_times(page_text) - baseline)
+    if not times:
+        times = sorted(parse_times("\n".join(responses)))
+    log(f"Times seen on page for {TARGET_DATE}: {[t.strftime('%-I:%M %p') for t in times] or 'none'}"
+        + (" (page says no availability)" if no_slots else ""))
+    return [t.strftime("%-I:%M %p") for t in times if t >= MIN_TIME]
+
+
+def load_state():
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def run_once():
+    if dt.date.today() > TARGET_DATE:
+        log(f"{TARGET_DATE} has passed; nothing to check. You can disable the schedule.")
+        return []
+    slots = check()
+    state = load_state()
+    previous = set(state.get("slots", []))
+    new = [s for s in slots if s not in previous]
+
+    if new:
+        subject = f"NYC marriage slot open: {OFFICE} {TARGET_DATE:%a %b %-d}"
+        body = (f"Available time(s) at/after {MIN_TIME:%-I:%M %p}: {', '.join(slots)}\n"
+                f"New since last check: {', '.join(new)}\n\nBook now: {URL}")
+        log(subject + " -> " + ", ".join(slots))
+        notify(subject, body)
+    elif slots:
+        log(f"Slots still open (already notified): {', '.join(slots)}")
+    else:
+        log("No qualifying slots.")
+
+    STATE_FILE.write_text(json.dumps({"slots": slots, "checked_at": dt.datetime.now().isoformat()}))
+    return slots
+
+
+def main():
+    if "--test-notify" in sys.argv:
+        notify("Test: NYC marriage slot checker", f"Notifications work. Watching {OFFICE} on {TARGET_DATE}.")
+        return
+    if "--loop" in sys.argv:
+        while True:
+            try:
+                run_once()
+            except Exception as e:
+                log(f"Check failed: {e}")
+            time.sleep(INTERVAL_SECONDS)
+    run_once()
+
+
+if __name__ == "__main__":
+    main()
