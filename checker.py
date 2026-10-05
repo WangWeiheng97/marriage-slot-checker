@@ -161,9 +161,33 @@ def settle(page, ms=1500):
     page.wait_for_timeout(ms)
 
 
-def choose_office(page):
+DROPDOWN_SEL = "select, [role='combobox'], lightning-combobox, lightning-select"
+
+
+def _shows_office(cb):
+    """True if a dropdown currently displays the office as its selected value."""
     name = re.compile(OFFICE, re.I)
-    # A native <select>?
+    for get in (lambda: cb.input_value(timeout=1000), lambda: cb.inner_text(timeout=1000),
+                lambda: cb.get_attribute("data-value") or "", lambda: cb.get_attribute("aria-label") or "",
+                lambda: cb.evaluate("e => e.closest('lightning-combobox, .slds-form-element')"
+                                    "?.innerText || ''")):
+        try:
+            if name.search(get() or ""):
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def choose_office(page):
+    """Selects OFFICE in the office dropdown. Never clicks loose text on the page."""
+    name = re.compile(OFFICE, re.I)
+    try:  # the dropdown can render a few seconds after the page
+        page.locator(DROPDOWN_SEL).first.wait_for(state="visible", timeout=30000)
+    except PWTimeout:
+        return False
+
+    # A native <select>
     for sel in page.locator("select").all():
         try:
             opts = sel.locator("option").all_inner_texts()
@@ -173,23 +197,34 @@ def choose_office(page):
                 return True
         except Exception:
             pass
-    # A Lightning combobox: open it, then click the option.
+
+    # A Lightning / custom combobox: open it, click the matching option, verify.
     for cb in page.get_by_role("combobox").all():
         try:
-            cb.click(timeout=2000)
-            if try_click(page, [page.get_by_role("option", name=name)], timeout=2000):
-                return True
+            if not cb.is_visible():
+                continue
+            cb.scroll_into_view_if_needed(timeout=2000)
+            cb.click(timeout=3000)
+            page.wait_for_timeout(800)
+            option = page.get_by_role("option", name=name).or_(
+                page.locator("lightning-base-combobox-item, [role='listbox'] li").filter(has_text=name))
+            if not option.count():
+                # Some comboboxes are searchable: type the name to filter the list.
+                try:
+                    cb.fill(OFFICE, timeout=1500)
+                    page.wait_for_timeout(1000)
+                except Exception:
+                    pass
+            if option.count():
+                option.first.click(timeout=3000)
+                page.wait_for_timeout(800)
+                if _shows_office(cb):
+                    return True
+                log("Clicked the office option but the dropdown doesn't show it; trying next dropdown")
             page.keyboard.press("Escape")
-        except Exception:
-            pass
-    return try_click(page, [
-        page.get_by_role("radio", name=name),
-        page.get_by_role("button", name=name),
-        page.get_by_role("link", name=name),
-        page.get_by_role("option", name=name),
-        page.get_by_label(name),
-        page.get_by_text(name),
-    ])
+        except Exception as e:
+            log(f"combobox attempt failed: {e}")
+    return False
 
 
 def click_next(page):
@@ -302,7 +337,7 @@ def check():
 
             if not choose_office(page):
                 dump_debug(page, "error_office")
-                raise RuntimeError(f"Could not find/select office '{OFFICE}' (see {DEBUG_DIR}/)")
+                raise RuntimeError(f"Could not select '{OFFICE}' in the office dropdown (see {DEBUG_DIR}/)")
             settle(page)
             click_next(page) and settle(page)
             dump_debug(page, "2_office")
@@ -386,6 +421,12 @@ def main():
                 if failures == 3:  # warn once, not on every failure
                     notify("NYC slot checker is failing",
                            f"The last 3 checks failed, it may need fixing.\nLast error: {e}")
+                    shots = sorted(DEBUG_DIR.glob("error_*.png"), key=lambda f: f.stat().st_mtime)
+                    try:
+                        if shots:
+                            send_telegram_file(shots[-1], "Where the checker got stuck")
+                    except Exception as e2:
+                        log(f"telegram screenshot failed: {e2}")
             next_at = began + INTERVAL_SECONDS
             if MAX_RUNTIME_SECONDS and next_at - start > MAX_RUNTIME_SECONDS:
                 log("Reached MAX_RUNTIME_MIN, exiting.")
