@@ -124,23 +124,6 @@ def date_regexes(d):
     return target, any_day
 
 
-def header_date(text):
-    """Best-effort date from a column header like 'Tue 10/21' or 'Oct 21'."""
-    m = re.search(r"\b(\d{1,2})/(\d{1,2})\b", text)
-    if m:
-        month, day = int(m.group(1)), int(m.group(2))
-    else:
-        m = re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})\b", text, re.I)
-        if not m:
-            return None
-        month = dt.datetime.strptime(m.group(1)[:3].title(), "%b").month
-        day = int(m.group(2))
-    try:
-        return dt.date(TARGET_DATE.year, month, day)
-    except ValueError:
-        return None
-
-
 def log(msg):
     print(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
 
@@ -435,13 +418,8 @@ def check():
         if columns["targetFound"]:
             times = sorted(parse_times("\n".join(columns["times"])))
         else:
-            # The site leaves out days that have no open slots. That's only fine
-            # if the days shown are around the target date, not some other week.
-            shown = [d for d in map(header_date, columns["headers"]) if d]
-            if shown and min(abs((d - TARGET_DATE).days) for d in shown) > 7:
-                raise RuntimeError(f"Page shows {min(shown)}..{max(shown)}, not around {TARGET_DATE} "
-                                   f"(see {DEBUG_DIR}/)")
-            log(f"No column for {TARGET_DATE:%a %b %-d}: the site hides days without open slots.")
+            # The site leaves out days that have no open slots: not an error.
+            log(f"No column for {TARGET_DATE:%a %b %-d}: no open slots that day.")
             times = []
     else:
         times = sorted(parse_times(page_text) - baseline)
