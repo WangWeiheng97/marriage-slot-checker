@@ -361,6 +361,9 @@ def dump_debug(page, tag):
 # --------------------------------------------------------------------------- #
 # Main check
 # --------------------------------------------------------------------------- #
+LAST_SEEN = {}  # what the last check saw, for status reports
+
+
 def check():
     """Returns the list of qualifying slot times (as 'H:MM AM' strings)."""
     with sync_playwright() as p:
@@ -423,6 +426,7 @@ def check():
             times = []
     else:
         times = sorted(parse_times(page_text) - baseline)
+    LAST_SEEN.update(columns=columns["headers"], times=[t.strftime("%-I:%M %p") for t in times])
     log(f"Times seen on page for {TARGET_DATE}: {[t.strftime('%-I:%M %p') for t in times] or 'none'}"
         + (" (page says no availability)" if no_slots else ""))
     return [t.strftime("%-I:%M %p") for t in times if t >= MIN_TIME]
@@ -461,6 +465,18 @@ def run_once():
         log(f"Slots still open (already notified): {', '.join(slots)}")
     else:
         log("No qualifying slots.")
+
+    if os.environ.get("REPORT") == "1" and not (new or (slots and NOTIFY_EVERY_RUN)):
+        # On-demand status message, to confirm the checker works when nothing is open.
+        notify("Status: NYC slot checker is working",
+               f"Checked {OFFICE} for {TARGET_DATE:%a %b %-d} just now.\n"
+               f"Date columns on page: {', '.join(LAST_SEEN.get('columns') or []) or 'n/a (single-day view)'}\n"
+               f"Times on {TARGET_DATE:%b %-d}: {', '.join(LAST_SEEN.get('times') or []) or 'none'}\n"
+               f"Alerting on: {MIN_TIME:%-I:%M %p} or later -> nothing to report.")
+        try:
+            send_telegram_file(DEBUG_DIR / "3_date.png", "What the checker saw (after picking office + date)")
+        except Exception as e:
+            log(f"telegram screenshot failed: {e}")
 
     STATE_FILE.write_text(json.dumps({"slots": slots, "checked_at": dt.datetime.now().isoformat()}))
     return slots
