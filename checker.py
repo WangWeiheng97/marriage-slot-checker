@@ -10,7 +10,7 @@ after MIN_TIME shows up.
 Config (environment variables):
   TARGET_DATE        2026-10-20
   OFFICE             Manhattan
-  MIN_TIME           09:00          (24h; slots >= this time count)
+  MIN_TIME           10:30          (24h; slots >= this time count)
   TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID           -> Telegram notification
   SMTP_USER / SMTP_PASSWORD / EMAIL_TO            -> email (Gmail app password)
   SMTP_HOST (smtp.gmail.com) / SMTP_PORT (465)
@@ -45,7 +45,7 @@ from playwright.sync_api import sync_playwright
 URL = os.environ.get("URL", "https://clerkscheduler.cityofnewyork.us/s/MarriageCeremony")
 TARGET_DATE = dt.date.fromisoformat(os.environ.get("TARGET_DATE", "2026-10-20"))
 OFFICE = os.environ.get("OFFICE", "Manhattan")
-MIN_TIME = dt.time.fromisoformat(os.environ.get("MIN_TIME", "09:00"))
+MIN_TIME = dt.time.fromisoformat(os.environ.get("MIN_TIME", "10:30"))
 STATE_FILE = Path(os.environ.get("STATE_FILE", "state.json"))
 DEBUG_DIR = Path(os.environ.get("DEBUG_DIR", "debug"))
 INTERVAL_SECONDS = float(os.environ.get("CHECK_INTERVAL_MIN", "5")) * 60
@@ -361,6 +361,8 @@ def dump_debug(page, tag):
 # --------------------------------------------------------------------------- #
 # Main check
 # --------------------------------------------------------------------------- #
+# 1 = also send "checker is failing" warnings and page screenshots to Telegram
+DEBUG_ALERTS = os.environ.get("DEBUG_ALERTS", "0") == "1"
 LAST_SEEN = {}  # what the last check saw, for status reports
 
 
@@ -454,10 +456,11 @@ def run_once():
                 f"New since last check: {', '.join(new) or 'none'}\n\nBook now: {URL}")
         log(subject + " -> " + ", ".join(slots))
         delivered = notify(subject, body)
-        try:  # show exactly what the checker saw, so the result can be verified
-            send_telegram_file(DEBUG_DIR / "3_date.png", "What the checker saw (after picking office + date)")
-        except Exception as e:
-            log(f"telegram screenshot failed: {e}")
+        if DEBUG_ALERTS:
+            try:  # show exactly what the checker saw, so the result can be verified
+                send_telegram_file(DEBUG_DIR / "3_date.png", "What the checker saw (after picking office + date)")
+            except Exception as e:
+                log(f"telegram screenshot failed: {e}")
         if not delivered:
             # Don't remember slots we failed to tell you about; retry next run.
             slots = [s for s in slots if s in previous]
@@ -496,7 +499,7 @@ def main():
             except Exception as e:
                 failures += 1
                 log(f"Check failed ({failures} in a row): {e}")
-                if failures == 3:  # warn once, not on every failure
+                if failures == 3 and DEBUG_ALERTS:  # warn once, not on every failure
                     notify("NYC slot checker is failing",
                            f"The last 3 checks failed, it may need fixing.\nLast error: {e}")
                     shots = sorted(DEBUG_DIR.glob("error_*.png"), key=lambda f: f.stat().st_mtime)
